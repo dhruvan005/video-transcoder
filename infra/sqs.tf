@@ -12,10 +12,15 @@ resource "aws_sqs_queue" "main" {
 }
 
 resource "aws_s3_bucket_notification" "notify" {
-  bucket = var.raw_bucket_id
+  bucket = aws_s3_bucket.raw_videos.bucket
 
   queue {
-    queue_arn = var.sqs_arn
+    queue_arn = aws_sqs_queue.main.arn
     events    = ["s3:ObjectCreated:*"]
   }
+}
+
+output "queue_url" {
+  description = "URL of the SQS queue"
+  value       = aws_sqs_queue.main.url
 }
