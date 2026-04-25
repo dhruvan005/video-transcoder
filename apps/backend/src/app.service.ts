@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { S3Client, ListBucketsCommand } from "@aws-sdk/client-s3";
+import AWS from 'aws-sdk';
+import { ReadStream, createWriteStream } from 'fs';
+
+
 
 @Injectable()
 export class AppService {
@@ -7,10 +11,17 @@ export class AppService {
     return 'Hello World!';
   }
 
-  uploadToS3(): string {
-    // Here you would implement the logic to upload a file to S3
-    // For example, you could use the AWS SDK for JavaScript to interact with S3
-    // This is just a placeholder implementation
-    return 'File uploaded to S3 successfully!';
+  async uploadToS3(fileStream: ReadStream, s3Key: string) {
+    try {
+      const params : AWS.S3.Types.PutObjectRequest = {
+        Bucket: 'your-bucket-name',
+        Key: s3Key,
+        Body: fileStream,
+        ContentType: 'video/mp4',
+      };
+    } catch (error) {
+      console.error('Error uploading file to S3:', error);
+    }
+    return { fileStream: null, s3Key: 'example-key' };
   }
 }
