@@ -10,8 +10,8 @@ export class AppController {
     return this.appService.getHello();
   }
 
-  @Put()
-  uploadToS3(): string {
-    return this.appService.uploadToS3();
-  }
+  // @Put()
+  // uploadToS3(): string {
+  //   return this.appService.uploadToS3();
+  // }
 }
