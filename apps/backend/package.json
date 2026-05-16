@@ -21,12 +21,14 @@
     "setup:localstack": "bash setup-localstack.sh"
   },
   "dependencies": {
+    "@aws-sdk/client-ecs": "^3.1048.0",
     "@aws-sdk/client-s3": "^3.1035.0",
     "@aws-sdk/client-sqs": "^3.1037.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "aws-lambda": "^1.0.7",
     "aws-sdk": "^2.1693.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -37,7 +39,9 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
+    "@types/aws-lambda": "^8.10.161",
     "@types/express": "^5.0.0",
+    "@types/fluent-ffmpeg": "^2.1.28",
     "@types/jest": "^30.0.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.10.7",

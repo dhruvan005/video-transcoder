@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Recurse -Path \"c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\" -Force)",
+      "Bash(Select-Object FullName)",
+      "Bash(npm install *)",
+      "Bash(Remove-Item \"c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\\\\docker\\\\.env\" -Force)"
+    ]
+  }
+}

@@ -1,0 +1,121 @@
+# Video Transcoder
+
+A cloud-native video transcoding pipeline built on AWS. Upload a raw video and get back multiple resolutions (720p, 480p, 360p) automatically.
+
+---
+
+## How It Works
+
+```
+User uploads video
+       |
+       v
+  S3 Raw Bucket
+       |
+       | (S3 event notification)
+       v
+   SQS Queue
+       |
+       | (Backend polls)
+       v
+  NestJS Backend
+       |
+       | (launches ECS task)
+       v
+ ECS Fargate Task
+  (Docker + ffmpeg)
+       |
+       | transcodes to 720p / 480p / 360p
+       v
+S3 Processed Bucket
+```
+
+1. **Upload** — A raw video file is uploaded to the S3 raw bucket.
+2. **Notify** — S3 sends an event notification to the SQS queue.
+3. **Poll** — The NestJS backend continuously polls the SQS queue for new messages.
+4. **Launch** — When a message arrives, the backend launches an ECS Fargate task, passing the S3 object key as an environment variable.
+5. **Transcode** — The Fargate container downloads the video, runs ffmpeg to produce three resolutions, and uploads each output to the S3 processed bucket.
+6. **Cleanup** — The SQS message is deleted after successful task launch. Failed tasks are retried up to 3 times via a Dead Letter Queue (DLQ).
+
+---
+
+## Project Structure
+
+```
+video-transcoder/
+├── apps/
+│   ├── backend/        # NestJS service — polls SQS, triggers ECS tasks
+│   └── frontend/       # Next.js UI — video upload interface
+├── docker/             # Transcoder worker (Node.js + ffmpeg, runs in ECS Fargate)
+└── infra/              # Terraform — S3, SQS, ECS, ECR, IAM
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js |
+| Backend | NestJS (Node.js) |
+| Transcoder Worker | Node.js + ffmpeg (Docker) |
+| Queue | AWS SQS |
+| Storage | AWS S3 |
+| Compute | AWS ECS Fargate |
+| Container Registry | AWS ECR |
+| Infrastructure | Terraform |
+
+---
+
+## Infrastructure Overview
+
+- **S3 Raw Bucket** — receives uploaded videos; triggers SQS notifications on new objects
+- **S3 Processed Bucket** — stores transcoded output organized by video key
+- **SQS Queue + DLQ** — decouples upload events from processing; DLQ catches failures after 3 retries
+- **ECS Fargate** — runs the transcoder container on demand; no servers to manage
+- **ECR** — hosts the Docker image for the transcoder worker
+- **IAM** — least-privilege roles for ECS task execution and backend SQS/ECS access
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+
+- Docker
+- Terraform
+- AWS CLI configured with appropriate credentials
+
+### 1. Provision Infrastructure
+
+```bash
+cd infra
+terraform init
+terraform apply
+```
+
+### 2. Build and Push the Transcoder Image
+
+```bash
+cd docker
+docker build -t video-transcoder-worker .
+# tag and push to the ECR repo created by Terraform
+```
+
+### 3. Run the Backend
+
+```bash
+cd apps/backend
+cp .env.example .env   # fill in values from Terraform outputs
+npm install
+npm run start:dev
+```
+
+### 4. Run the Frontend
+
+```bash
+cd apps/frontend
+npm install
+npm run dev
+```
