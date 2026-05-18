@@ -117,3 +117,14 @@ resource "aws_ecs_task_definition" "transcoder" {
     }
   ])
 }
+
+// Note: The task role is defined here to give ECS tasks permissions to access S3 buckets.
+# resource "aws_iam_role" "backend_task_role" {
+#   name = "${var.project}-backend-task-role"
+#   assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
+# }
+
+# resource "aws_iam_role_policy_attachment" "backend_policy" {
+#   role       = aws_iam_role.backend_task_role.name
+#   policy_arn = aws_iam_policy.backend_policy.arn  # already exists in backend_iam.tf
+# }
