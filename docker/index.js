@@ -5,14 +5,16 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
+import { pipeline } from 'node:stream/promises';
 
 dotenv.config();
 
 const RESOLUTIONS = [
-  { name: "720p", width: 1280, height: 720 },
-  { name: "480p", width: 854, height: 480 },
-  { name: "360p", width: 640, height: 360 },
+  { name: "720p", width: 1280, height: 720, codec: "libx264", crf: 23 },
+  { name: "480p", width: 854,  height: 480, codec: "libx265", crf: 28 },
+  { name: "360p", width: 640,  height: 360, codec: "libx265", crf: 28 },
 ];
+
 
 // Credentials come from ECS task IAM role automatically — no hardcoding needed
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
@@ -29,7 +31,7 @@ async function init() {
   );
 
   const originalFilePath = path.resolve("original-video.mp4");
-  await fs.writeFile(originalFilePath, result.Body);
+  await pipeline(result.Body, fsSync.createWriteStream(originalFilePath)); // Stream download directly to file to handle large videos without memory issues
   console.log("Download complete");
 
   // Derive a per-video S3 prefix so concurrent jobs never collide
@@ -40,12 +42,17 @@ async function init() {
     const outputFilePath = path.resolve(`output-${resolution.name}.mp4`);
     const s3OutputKey = `${keyBase}/${resolution.name}.mp4`;
 
+
     return new Promise((resolve, reject) => {
       ffmpeg(originalFilePath)
         .output(outputFilePath)
-        .withVideoCodec("libx264")
-        .withAudioCodec("aac")
+        .withVideoCodec(resolution.codec)
+        .withAudioCodec('aac')
+        .addOption('-b:a', '128k')
         .withSize(`${resolution.width}x${resolution.height}`)
+        .addOption('-crf', String(resolution.crf)) 
+        .addOption('-preset', 'fast')
+        .addOption('-threads', '0')
         .on("end", async () => {
           try {
             // PutObjectCommand with a ReadStream body silently uploads 0 bytes for
@@ -73,7 +80,7 @@ async function init() {
           console.error(`ffmpeg error (${resolution.name}):`, err.message);
           reject(err);
         })
-        .format("mp4")
+        .format("mp4") // If we want to do a stream then it need hls and ts files, but for now we can just write to disk and upload after. This is simpler and more compatible with ffmpeg.
         .run();
     });
   });
