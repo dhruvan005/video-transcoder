@@ -11,8 +11,8 @@ dotenv.config();
 
 const RESOLUTIONS = [
   { name: "720p", width: 1280, height: 720, codec: "libx264", crf: 23 },
-  { name: "480p", width: 854,  height: 480, codec: "libx265", crf: 28 },
-  { name: "360p", width: 640,  height: 360, codec: "libx265", crf: 28 },
+  { name: "480p", width: 854,  height: 480, codec: "libx264", crf: 23 },
+  { name: "360p", width: 640,  height: 360, codec: "libx264", crf: 23 },
 ];
 
 
