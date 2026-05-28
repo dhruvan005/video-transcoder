@@ -38,10 +38,9 @@ async function init() {
   // e.g. KEY = "videos/my-clip.mp4" → prefix = "videos/my-clip"
   const keyBase = KEY.replace(/\.[^/.]+$/, "");
 
-  const promises = RESOLUTIONS.map((resolution) => {
+  function transcodeResolution(resolution) {
     const outputFilePath = path.resolve(`output-${resolution.name}.mp4`);
     const s3OutputKey = `${keyBase}/${resolution.name}.mp4`;
-
 
     return new Promise((resolve, reject) => {
       ffmpeg(originalFilePath)
@@ -50,8 +49,8 @@ async function init() {
         .withAudioCodec('aac')
         .addOption('-b:a', '128k')
         .withSize(`${resolution.width}x${resolution.height}`)
-        .addOption('-crf', String(resolution.crf)) 
-        .addOption('-preset', 'fast')
+        .addOption('-crf', String(resolution.crf))
+        .addOption('-preset', 'veryfast')
         .addOption('-threads', '0')
         .on("end", async () => {
           try {
@@ -83,10 +82,14 @@ async function init() {
         .format("mp4") // If we want to do a stream then it need hls and ts files, but for now we can just write to disk and upload after. This is simpler and more compatible with ffmpeg.
         .run();
     });
-  });
+  }
 
   try {
-    await Promise.all(promises);
+    // Sequential encoding gives each ffmpeg job full CPU on a 2 vCPU Fargate task.
+    // Parallel jobs compete for the same cores and end up slower overall.
+    for (const resolution of RESOLUTIONS) {
+      await transcodeResolution(resolution);
+    }
     await fs.unlink(originalFilePath);
     console.log("All resolutions transcoded and uploaded successfully.");
     process.exit(0);

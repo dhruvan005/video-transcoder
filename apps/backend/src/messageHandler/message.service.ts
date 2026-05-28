@@ -45,40 +45,7 @@ export class MessageService implements OnModuleInit, OnModuleDestroy {
       try {
         const { Messages } = await this.MessageClient.send(command);
         if (Messages) {
-          for (const message of Messages) {
-            const { MessageId, Body, ReceiptHandle } = message;
-            console.log('Received message:', MessageId);
-
-            if (!Body || !ReceiptHandle) {
-              console.warn(`Message ${MessageId} has no body, skipping`);
-              continue;
-            }
-
-            const event = JSON.parse(Body) as S3Event;
-
-            if ('Service' in event && 'Event' in event) {
-              if ((event as any).Event === 's3:TestEvent') {
-                await this.deleteMessage(ReceiptHandle);
-                continue;
-              }
-            }
-
-            for (const record of event.Records) {
-              const {
-                bucket,
-                object: { key },
-              } = record.s3;
-              const decodedKey = decodeURIComponent(key.replace(/\+/g, ' '));
-
-              console.log(
-                `Launching transcoder for s3://${bucket.name}/${decodedKey}`,
-              );
-              await this.launchTranscoderTask(bucket.name, decodedKey);
-            }
-
-            // Delete the message after processing
-            await this.deleteMessage(ReceiptHandle);
-          }
+          await Promise.all(Messages.map((message) => this.processMessage(message)));
         } else {
           console.log('No messages received');
         }
@@ -87,6 +54,36 @@ export class MessageService implements OnModuleInit, OnModuleDestroy {
         throw err;
       }
     }
+  }
+
+  private async processMessage(message: { MessageId?: string; Body?: string; ReceiptHandle?: string }) {
+    const { MessageId, Body, ReceiptHandle } = message;
+    console.log('Received message:', MessageId);
+
+    if (!Body || !ReceiptHandle) {
+      console.warn(`Message ${MessageId} has no body, skipping`);
+      return;
+    }
+
+    const event = JSON.parse(Body) as S3Event;
+
+    if ('Service' in event && 'Event' in event) {
+      if ((event as any).Event === 's3:TestEvent') {
+        await this.deleteMessage(ReceiptHandle);
+        return;
+      }
+    }
+
+    await Promise.all(
+      event.Records.map(async (record) => {
+        const { bucket, object: { key } } = record.s3;
+        const decodedKey = decodeURIComponent(key.replace(/\+/g, ' '));
+        console.log(`Launching transcoder for s3://${bucket.name}/${decodedKey}`);
+        await this.launchTranscoderTask(bucket.name, decodedKey);
+      }),
+    );
+
+    await this.deleteMessage(ReceiptHandle);
   }
 
   private async launchTranscoderTask(bucketName: string, key: string) {
