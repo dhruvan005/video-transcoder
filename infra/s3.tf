@@ -46,6 +46,20 @@ resource "aws_s3_bucket_versioning" "versioning" {
   }
 }
 
+# Allow the frontend to upload directly to the raw bucket with presigned PUT URLs.
+# Without this, browser uploads fail the CORS preflight.
+resource "aws_s3_bucket_cors_configuration" "raw_cors" {
+  bucket = aws_s3_bucket.raw_videos.id
+
+  cors_rule {
+    allowed_methods = ["PUT"]
+    allowed_origins = var.frontend_origins
+    allowed_headers = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "enc" {
   bucket = aws_s3_bucket.raw_videos.id
 
