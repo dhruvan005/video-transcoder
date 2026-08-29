@@ -78,6 +78,14 @@ resource "aws_security_group" "ecs_tasks" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  egress {
+    description = "Redis (ElastiCache) for job status"
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.default.cidr_block]
+  }
 }
 
 resource "aws_ecs_cluster" "main" {
@@ -103,7 +111,8 @@ resource "aws_ecs_task_definition" "transcoder" {
       environment = [
         { name = "AWS_REGION", value = var.aws_region },
         { name = "BUCKET_NAME_RAW", value = local.raw_bucket_name },
-        { name = "BUCKET_NAME_TRANSCODED", value = local.processed_bucket_name }
+        { name = "BUCKET_NAME_TRANSCODED", value = local.processed_bucket_name },
+        { name = "REDIS_URI", value = local.redis_uri }
       ]
 
       logConfiguration = {

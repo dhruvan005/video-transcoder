@@ -1,48 +1,174 @@
-import Uploader from "./components/Uploader";
+"use client";
 
-const PIPELINE = [
-  { step: "Upload", detail: "Straight to the S3 raw bucket" },
-  { step: "Queue", detail: "S3 event lands in SQS" },
-  { step: "Transcode", detail: "ECS Fargate runs ffmpeg" },
-  { step: "Deliver", detail: "720p · 480p · 360p in S3" },
-];
+import { useRef, useState } from "react";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+
+type Phase = "idle" | "uploading" | "processing" | "completed" | "failed";
+
+type PresignedPost = {
+  url: string;
+  fields: Record<string, string>;
+  key: string;
+};
 
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [progress, setProgress] = useState(0);
+  const [message, setMessage] = useState("");
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function getPresignedPost(filename: string): Promise<PresignedPost> {
+    const res = await fetch(
+      `${API_URL}/signedurl?filename=${encodeURIComponent(filename)}`
+    );
+    if (!res.ok) throw new Error("Could not get an upload URL");
+    return res.json();
+  }
+
+  // fetch() can't report upload progress, so upload via XHR.
+  function uploadToS3(post: PresignedPost, video: File): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const form = new FormData();
+      Object.entries(post.fields).forEach(([k, v]) => form.append(k, v));
+      // Must satisfy the presigned "starts-with $Content-Type video/" condition.
+      form.append("Content-Type", video.type || "video/mp4");
+      form.append("file", video);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", post.url, true);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          setProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+      xhr.onload = () =>
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve()
+          : reject(new Error(`Upload failed (${xhr.status})`));
+      xhr.onerror = () => reject(new Error("Upload network error"));
+      xhr.send(form);
+    });
+  }
+
+  function pollStatus(key: string) {
+    const tick = async () => {
+      try {
+        // Key can contain '/' (videos/<uuid>.mp4); keep the slashes so the
+        // greedy {key+} route matches. The segments are already URL-safe.
+        const res = await fetch(`${API_URL}/status/${key}`);
+        const data = await res.json();
+        const status: string = data.status;
+
+        if (status === "COMPLETED") {
+          setPhase("completed");
+          setMessage("Transcoding complete — all resolutions are ready.");
+          return;
+        }
+        if (status === "FAILED") {
+          setPhase("failed");
+          setMessage("Transcoding failed. Please try again.");
+          return;
+        }
+        // PROCESSING or NOT_FOUND (task not started yet) → keep waiting.
+        setMessage(
+          status === "PROCESSING"
+            ? "Transcoding your video…"
+            : "Waiting for the transcoder to pick up your video…"
+        );
+      } catch {
+        setMessage("Checking status…");
+      }
+      pollTimer.current = setTimeout(tick, 2500);
+    };
+    tick();
+  }
+
+  async function handleUpload() {
+    if (!file) return;
+    if (!API_URL) {
+      setPhase("failed");
+      setMessage("NEXT_PUBLIC_API_URL is not configured.");
+      return;
+    }
+
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    setProgress(0);
+    setPhase("uploading");
+    setMessage("Requesting upload URL…");
+
+    try {
+      const post = await getPresignedPost(file.name);
+      setMessage("Uploading…");
+      await uploadToS3(post, file);
+
+      setPhase("processing");
+      setMessage("Upload complete. Starting transcode…");
+      pollStatus(post.key);
+    } catch (err) {
+      setPhase("failed");
+      setMessage(err instanceof Error ? err.message : "Something went wrong.");
+    }
+  }
+
+  const busy = phase === "uploading" || phase === "processing";
+
   return (
-    <main className="relative mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 py-16 sm:py-24">
-      <header className="text-center">
-        <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-white/60">
-          <span className="size-1.5 rounded-full bg-emerald-400" />
-          Cloud-native transcoding on AWS
-        </span>
-        <h1 className="mt-6 bg-linear-to-b from-white to-white/60 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl">
-          Video Transcoder
-        </h1>
-        <p className="mx-auto mt-4 max-w-xl text-balance text-base text-white/50">
-          Upload a raw video and get back streaming-ready 720p, 480p, and 360p renditions —
-          transcoded automatically by a serverless ffmpeg pipeline.
+    <main className="mx-auto flex max-w-xl flex-col gap-6 p-8">
+      <div>
+        <h1 className="text-2xl font-semibold">Video Transcoder</h1>
+        <p className="text-sm text-gray-500">
+          Upload a video and we&apos;ll transcode it to 1080p, 720p, 480p and 360p.
         </p>
-      </header>
+      </div>
 
-      <section className="mt-12">
-        <Uploader />
-      </section>
+      <input
+        type="file"
+        accept="video/*"
+        disabled={busy}
+        onChange={(e) => {
+          setFile(e.target.files?.[0] ?? null);
+          setPhase("idle");
+          setProgress(0);
+          setMessage("");
+        }}
+        className="block w-full text-sm file:mr-4 file:rounded-md file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:text-white hover:file:bg-blue-700"
+      />
 
-      <section className="mt-14">
-        <ol className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {PIPELINE.map((item, i) => (
-            <li key={item.step} className="rounded-2xl border border-white/10 bg-white/20 p-4">
-              <span className="text-xs font-semibold text-indigo-300/80">Step {i + 1}</span>
-              <p className="mt-1 text-sm font-medium text-white">{item.step}</p>
-              <p className="mt-0.5 text-xs leading-relaxed text-white/40">{item.detail}</p>
-            </li>
-          ))}
-        </ol>
-      </section>
+      <button
+        onClick={handleUpload}
+        disabled={!file || busy}
+        className="rounded-md bg-blue-600 px-4 py-2 text-white disabled:cursor-not-allowed disabled:opacity-50 hover:bg-blue-700"
+      >
+        {busy ? "Working…" : "Upload & Transcode"}
+      </button>
 
-      <footer className="mt-16 text-center text-xs text-white/30">
-        Next.js · NestJS · AWS S3 · SQS · ECS Fargate
-      </footer>
+      {phase === "uploading" && (
+        <div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
+            <div
+              className="h-full bg-blue-600 transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <p className="mt-1 text-right text-xs text-gray-500">{progress}%</p>
+        </div>
+      )}
+
+      {message && (
+        <p
+          className={
+            phase === "failed"
+              ? "text-sm text-red-600"
+              : phase === "completed"
+                ? "text-sm text-green-600"
+                : "text-sm text-gray-600"
+          }
+        >
+          {message}
+        </p>
+      )}
     </main>
   );
 }

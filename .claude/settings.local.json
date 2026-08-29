@@ -4,7 +4,16 @@
       "Bash(Get-ChildItem -Recurse -Path \"c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\" -Force)",
       "Bash(Select-Object FullName)",
       "Bash(npm install *)",
-      "Bash(Remove-Item \"c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\\\\docker\\\\.env\" -Force)"
+      "Bash(Remove-Item \"c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\\\\docker\\\\.env\" -Force)",
+      "Bash(npm run *)",
+      "Bash(terraform version *)",
+      "Bash(terraform init *)",
+      "Bash(node --check index.js)",
+      "Bash(node -e \"import\\('ioredis'\\).then\\(\\(\\)=>console.log\\('ioredis resolves'\\)\\).catch\\(e=>console.error\\(e.message\\)\\)\")",
+      "Read(//c/Users/patel/Desktop/**)",
+      "Bash(terraform validate *)",
+      "Bash(terraform state *)",
+      "Bash(docker build *)"
     ]
   }
 }

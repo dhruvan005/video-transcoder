@@ -1,0 +1,13 @@
+# Never ship host-built deps — they're reinstalled cleanly inside the image
+# and may contain wrong-platform (Windows) native binaries.
+node_modules
+npm-debug.log
+
+# Not needed at runtime
+.env
+.env.*
+.gitignore
+.dockerignore
+Dockerfile
+push-command.md
+*.md

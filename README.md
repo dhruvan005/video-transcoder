@@ -1,41 +1,42 @@
 # Video Transcoder
 
-A cloud-native video transcoding pipeline built on AWS. Upload a raw video and get back multiple resolutions (720p, 480p, 360p) automatically.
+A cloud-native video transcoding pipeline built on AWS. Upload a raw video and get back multiple resolutions (1080p, 720p, 480p, 360p) automatically, with live status tracking.
 
 ---
 
 ## How It Works
 
 ```
-User uploads video
-       |
-       v
-  S3 Raw Bucket
-       |
-       | (S3 event notification)
-       v
-   SQS Queue
-       |
-       | (Backend polls)
-       v
-  NestJS Backend
-       |
-       | (launches ECS task)
-       v
- ECS Fargate Task
-  (Docker + ffmpeg)
-       |
-       | transcodes to 720p / 480p / 360p
-       v
-S3 Processed Bucket
+        Browser (Next.js)
+          |        ^
+          | (1)    | (6) poll GET /status/{key}
+          v        |
+   API Gateway ──> Presigned Lambda ──┐        Status Lambda ──> Redis
+          |                           |            ^  (ElastiCache)
+          | (2) presigned POST        |            |
+          v                           |            | (5) PROCESSING/COMPLETED/FAILED
+     S3 Raw Bucket <──────────────────┘            |
+          |                                        |
+          | (3) S3 event notification              |
+          v                                        |
+  Source-Bucket-Trigger Lambda                     |
+          |                                        |
+          | (4) ecs:RunTask                        |
+          v                                        |
+     ECS Fargate Task ─────────────────────────────┘
+      (Docker + ffmpeg)
+          |
+          | transcodes to 1080p / 720p / 480p / 360p
+          v
+   S3 Processed Bucket
 ```
 
-1. **Upload** — A raw video file is uploaded to the S3 raw bucket.
-2. **Notify** — S3 sends an event notification to the SQS queue.
-3. **Poll** — The NestJS backend continuously polls the SQS queue for new messages.
-4. **Launch** — When a message arrives, the backend launches an ECS Fargate task, passing the S3 object key as an environment variable.
-5. **Transcode** — The Fargate container downloads the video, runs ffmpeg to produce three resolutions, and uploads each output to the S3 processed bucket.
-6. **Cleanup** — The SQS message is deleted after successful task launch. Failed tasks are retried up to 3 times via a Dead Letter Queue (DLQ).
+1. **Get URL** — The browser calls `GET /signedurl`; the presigned Lambda returns a presigned POST plus a unique object `key`.
+2. **Upload** — The browser uploads the video directly to the S3 raw bucket using the presigned POST.
+3. **Notify** — S3 sends an `ObjectCreated` event notification that invokes the source-bucket-trigger Lambda.
+4. **Launch** — The trigger Lambda launches an ECS Fargate task, passing the S3 object key as an environment variable.
+5. **Transcode** — The Fargate container marks the job `PROCESSING` in Redis, downloads the video, runs ffmpeg to produce four resolutions, uploads each output to the S3 processed bucket, deletes the source object, and marks the job `COMPLETED` (or `FAILED` on error).
+6. **Track** — The browser polls `GET /status/{key}`, which the status Lambda answers by reading the job's status from Redis.
 
 ---
 
@@ -44,10 +45,11 @@ S3 Processed Bucket
 ```
 video-transcoder/
 ├── apps/
-│   ├── backend/        # NestJS service — polls SQS, triggers ECS tasks
-│   └── frontend/       # Next.js UI — video upload interface
+│   └── frontend/       # Next.js UI — upload + status polling
+├── lambda/
+│   └── functions/      # TypeScript Lambdas: presigned-post, source-bucket-trigger, status
 ├── docker/             # Transcoder worker (Node.js + ffmpeg, runs in ECS Fargate)
-└── infra/              # Terraform — S3, SQS, ECS, ECR, IAM
+└── infra/              # Terraform — S3, Lambda, API Gateway, ElastiCache, ECS, ECR, IAM
 ```
 
 ---
@@ -57,9 +59,10 @@ video-transcoder/
 | Layer | Technology |
 |---|---|
 | Frontend | Next.js |
-| Backend | NestJS (Node.js) |
+| API | AWS API Gateway (REST) |
+| Serverless functions | AWS Lambda (Node.js / TypeScript) |
 | Transcoder Worker | Node.js + ffmpeg (Docker) |
-| Queue | AWS SQS |
+| Status store | AWS ElastiCache (Redis) |
 | Storage | AWS S3 |
 | Compute | AWS ECS Fargate |
 | Container Registry | AWS ECR |
@@ -69,12 +72,16 @@ video-transcoder/
 
 ## Infrastructure Overview
 
-- **S3 Raw Bucket** — receives uploaded videos; triggers SQS notifications on new objects
+- **API Gateway** — exposes `GET /signedurl` and `GET /status/{key}` with CORS enabled for browser access
+- **Presigned Lambda** — mints presigned POSTs so browsers upload straight to S3
+- **Source-Bucket-Trigger Lambda** — invoked by S3 `ObjectCreated` events; launches the Fargate transcoder task
+- **Status Lambda** — VPC-attached; reads per-job status from Redis
+- **S3 Raw Bucket** — receives uploaded videos (CORS-enabled); triggers the Lambda on new objects
 - **S3 Processed Bucket** — stores transcoded output organized by video key
-- **SQS Queue + DLQ** — decouples upload events from processing; DLQ catches failures after 3 retries
+- **ElastiCache (Redis)** — single-node store for per-job status; lives in the default VPC
 - **ECS Fargate** — runs the transcoder container on demand; no servers to manage
 - **ECR** — hosts the Docker image for the transcoder worker
-- **IAM** — least-privilege roles for ECS task execution and backend SQS/ECS access
+- **IAM** — least-privilege roles for each Lambda and the ECS task
 
 ---
 
@@ -95,6 +102,8 @@ terraform init
 terraform apply
 ```
 
+Terraform builds and bundles the Lambda code automatically (via `npm ci && npm run build` in `lambda/functions`). Note the `api_gateway_invoke_url` and `redis_endpoint` outputs.
+
 ### 2. Build and Push the Transcoder Image
 
 ```bash
@@ -103,20 +112,11 @@ docker build -t video-transcoder-worker .
 # tag and push to the ECR repo created by Terraform
 ```
 
-### 3. Run the Backend
-
-```bash
-cd apps/backend
-cp .env.example .env   # fill in values from Terraform outputs
-npm install
-npm run start:dev
-```
-
-### 4. Run the Frontend
+### 3. Run the Frontend
 
 ```bash
 cd apps/frontend
-cp .env.example .env.local   # fill in AWS_REGION, credentials, RAW_BUCKET, PROCESSED_BUCKET
+cp .env .env.local   # set NEXT_PUBLIC_API_URL to the api_gateway_invoke_url output
 npm install
 npm run dev
 ```

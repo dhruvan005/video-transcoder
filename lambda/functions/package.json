@@ -1,0 +1,25 @@
+{
+  "name": "video-transcoder-lambdas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lambda functions: presigned upload URL, S3-trigger ECS launcher, job status",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run build:presigned && npm run build:trigger && npm run build:status",
+    "build:presigned": "esbuild src/presigned-post/index.ts --bundle --platform=node --target=node20 --outfile=dist/presigned-post/index.js",
+    "build:trigger": "esbuild src/source-bucket-trigger/index.ts --bundle --platform=node --target=node20 --outfile=dist/source-bucket-trigger/index.js",
+    "build:status": "esbuild src/status/index.ts --bundle --platform=node --target=node20 --outfile=dist/status/index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ecs": "^3.1040.0",
+    "@aws-sdk/client-s3": "^3.1040.0",
+    "@aws-sdk/s3-presigned-post": "^3.1040.0",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}

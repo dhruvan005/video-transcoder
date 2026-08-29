@@ -1,6 +1,11 @@
 import dotenv from "dotenv";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import Redis from "ioredis";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
@@ -19,11 +24,27 @@ const RESOLUTIONS = [
 // Credentials come from ECS task IAM role automatically — no hardcoding needed
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 
+// Redis holds per-job status so the frontend can poll progress.
+const redis = process.env.REDIS_URI ? new Redis(process.env.REDIS_URI) : null;
+
 const bucketNameRaw = process.env.BUCKET_NAME_RAW;
 const bucketNameTranscoded = process.env.BUCKET_NAME_TRANSCODED;
 const KEY = process.env.KEY;
 
+// Best-effort status write — never let a Redis hiccup abort transcoding.
+async function setStatus(status) {
+  if (!redis) return;
+  try {
+    await redis.set(KEY, status);
+    console.log(`Status ${KEY} → ${status}`);
+  } catch (err) {
+    console.error(`Failed to set status ${status}:`, err.message);
+  }
+}
+
 async function init() {
+  await setStatus("PROCESSING");
+
   console.log(`Downloading s3://${bucketNameRaw}/${KEY}`);
 
   const result = await s3Client.send(
@@ -50,7 +71,7 @@ async function init() {
         .addOption('-b:a', '128k')
         .withSize(`${resolution.width}x${resolution.height}`)
         .addOption('-crf', String(resolution.crf))
-        .addOption('-preset', 'veryfast')
+        .addOption('-preset', 'fast')
         .addOption('-threads', '0')
         .on("end", async () => {
           try {
@@ -91,10 +112,25 @@ async function init() {
       await transcodeResolution(resolution);
     }
     await fs.unlink(originalFilePath);
+
+    // Source is fully transcoded — drop it from the raw bucket to save storage.
+    try {
+      await s3Client.send(
+        new DeleteObjectCommand({ Bucket: bucketNameRaw, Key: KEY })
+      );
+      console.log(`Deleted source s3://${bucketNameRaw}/${KEY}`);
+    } catch (err) {
+      console.error("Failed to delete source object:", err.message);
+    }
+
+    await setStatus("COMPLETED");
     console.log("All resolutions transcoded and uploaded successfully.");
+    if (redis) await redis.quit();
     process.exit(0);
   } catch (error) {
     console.error("Transcoding failed:", error);
+    await setStatus("FAILED");
+    if (redis) await redis.quit();
     process.exit(1);
   }
 }
