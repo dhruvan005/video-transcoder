@@ -13,7 +13,10 @@
       "Read(//c/Users/patel/Desktop/**)",
       "Bash(terraform validate *)",
       "Bash(terraform state *)",
-      "Bash(docker build *)"
+      "Bash(docker build *)",
+      "Bash(docker run --rm --entrypoint sh -v C:/Users/patel/AppData/Local/Temp/claude/c--Users-patel-Desktop-Development-video-transcoder/66770b3f-2461-4b48-968f-681ae41e865a/scratchpad/ff-wrapper-test.mjs:/app/ff-wrapper-test.mjs video-transcoder-worker -c ' *)",
+      "PowerShell(docker build -t video-transcoder:latest c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\\\\docker)",
+      "PowerShell($imgHash = docker run --rm --entrypoint sh video-transcoder:latest -c \"sha256sum /app/index.js\" ; $diskHash = \\(Get-FileHash c:\\\\Users\\\\patel\\\\Desktop\\\\Development\\\\video-transcoder\\\\docker\\\\index.js -Algorithm SHA256\\).Hash.ToLower\\(\\) ; Write-Output \"IN IMAGE : $imgHash\" ; Write-Output \"ON DISK  : $diskHash\")"
     ]
   }
 }

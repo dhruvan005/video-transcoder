@@ -42,10 +42,87 @@ async function setStatus(status) {
   }
 }
 
+const outputPath = (resolution) => path.resolve(`output-${resolution.name}.mp4`);
+
+/**
+ * Transcode every resolution in a SINGLE ffmpeg process. The source is decoded
+ * once and a `split` filter fans it out to N scaled encodes, so we don't pay
+ * the (expensive) decode cost per resolution. With one process, `-threads 0`
+ * lets ffmpeg use every core without the contention of concurrent jobs.
+ */
+function transcodeAll(inputPath) {
+  return new Promise((resolve, reject) => {
+    // Build the filtergraph:
+    //   [0:v]split=3[v0in][v1in][v2in];
+    //   [v0in]scale=1280:720[v0]; [v1in]scale=854:480[v1]; ...
+    const splitOutputs = RESOLUTIONS.map((_, i) => `[v${i}in]`).join("");
+    const filters = [
+      `[0:v]split=${RESOLUTIONS.length}${splitOutputs}`,
+      ...RESOLUTIONS.map(
+        (r, i) => `[v${i}in]scale=${r.width}:${r.height}[v${i}]`
+      ),
+    ];
+
+    const command = ffmpeg(inputPath).complexFilter(filters);
+
+    RESOLUTIONS.forEach((r, i) => {
+      command.output(outputPath(r)).outputOptions([
+        "-map", `[v${i}]`,     // scaled video for this resolution
+        "-map", "0:a?",         // original audio (optional — '?' tolerates none)
+        "-c:v", r.codec,
+        "-crf", String(r.crf),
+        "-preset", "fast",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-threads", "0",
+        "-movflags", "+faststart", // enable progressive playback on the web
+        "-f", "mp4",
+      ]);
+    });
+
+    command
+      .on("start", (cmd) => console.log("ffmpeg:", cmd))
+      .on("progress", (p) => {
+        if (p.percent != null) console.log(`Encoding… ${Math.round(p.percent)}%`);
+      })
+      .on("end", () => {
+        console.log("All resolutions encoded (single decode).");
+        resolve();
+      })
+      .on("error", (err) => {
+        console.error("ffmpeg error:", err.message);
+        reject(err);
+      })
+      .run();
+  });
+}
+
+// Upload one finished output file to the processed bucket, then delete it locally.
+async function uploadOutput(resolution, keyBase) {
+  const filePath = outputPath(resolution);
+  const s3OutputKey = `${keyBase}/${resolution.name}.mp4`;
+
+  // PutObjectCommand with a ReadStream body silently uploads 0 bytes for large
+  // files in SDK v3 — Upload handles multipart streaming correctly.
+  const upload = new Upload({
+    client: s3Client,
+    params: {
+      Bucket: bucketNameTranscoded,
+      Key: s3OutputKey,
+      Body: fsSync.createReadStream(filePath),
+      ContentType: "video/mp4",
+    },
+  });
+
+  await upload.done();
+  console.log(`Uploaded ${resolution.name} → s3://${bucketNameTranscoded}/${s3OutputKey}`);
+  await fs.unlink(filePath);
+}
+
 async function init() {
   await setStatus("PROCESSING");
 
-  console.log(`Downloading s3://${bucketNameRaw}/${KEY}`);
+  console.log(`Latest Downloading s3://${bucketNameRaw}/${KEY}`);
 
   const result = await s3Client.send(
     new GetObjectCommand({ Bucket: bucketNameRaw, Key: KEY })
@@ -59,61 +136,16 @@ async function init() {
   // e.g. KEY = "videos/my-clip.mp4" → prefix = "videos/my-clip"
   const keyBase = KEY.replace(/\.[^/.]+$/, "");
 
-  function transcodeResolution(resolution) {
-    const outputFilePath = path.resolve(`output-${resolution.name}.mp4`);
-    const s3OutputKey = `${keyBase}/${resolution.name}.mp4`;
-
-    return new Promise((resolve, reject) => {
-      ffmpeg(originalFilePath)
-        .output(outputFilePath)
-        .withVideoCodec(resolution.codec)
-        .withAudioCodec('aac')
-        .addOption('-b:a', '128k')
-        .withSize(`${resolution.width}x${resolution.height}`)
-        .addOption('-crf', String(resolution.crf))
-        .addOption('-preset', 'fast')
-        .addOption('-threads', '0')
-        .on("end", async () => {
-          try {
-            // PutObjectCommand with a ReadStream body silently uploads 0 bytes for
-            // large files in SDK v3 — Upload handles multipart streaming correctly.
-            const upload = new Upload({
-              client: s3Client,
-              params: {
-                Bucket: bucketNameTranscoded,
-                Key: s3OutputKey,
-                Body: fsSync.createReadStream(outputFilePath),
-                ContentType: "video/mp4",
-              },
-            });
-
-            await upload.done();
-            console.log(`Uploaded ${resolution.name} → s3://${bucketNameTranscoded}/${s3OutputKey}`);
-
-            await fs.unlink(outputFilePath);
-            resolve();
-          } catch (err) {
-            reject(err);
-          }
-        })
-        .on("error", (err) => {
-          console.error(`ffmpeg error (${resolution.name}):`, err.message);
-          reject(err);
-        })
-        .format("mp4") // If we want to do a stream then it need hls and ts files, but for now we can just write to disk and upload after. This is simpler and more compatible with ffmpeg.
-        .run();
-    });
-  }
-
   try {
-    // Sequential encoding gives each ffmpeg job full CPU on a 2 vCPU Fargate task.
-    // Parallel jobs compete for the same cores and end up slower overall.
-    for (const resolution of RESOLUTIONS) {
-      await transcodeResolution(resolution);
-    }
+    // 1) One ffmpeg pass produces every resolution locally.
+    await transcodeAll(originalFilePath);
+
+    // 2) Upload the outputs in parallel (network-bound, independent files).
+    await Promise.all(RESOLUTIONS.map((r) => uploadOutput(r, keyBase)));
+
     await fs.unlink(originalFilePath);
 
-    // Source is fully transcoded — drop it from the raw bucket to save storage.
+    // 3) Source is fully transcoded — drop it from the raw bucket to save storage.
     try {
       await s3Client.send(
         new DeleteObjectCommand({ Bucket: bucketNameRaw, Key: KEY })
